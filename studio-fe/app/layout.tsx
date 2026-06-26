@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "AdStudio — AI Video Ad Generator",
-  description: "Paste a URL. Get 3 scored, captioned, multi-format video ads in under 3 minutes.",
+  description: "Paste a URL. Get a scored, captioned, multi-format video ad in under a minute.",
 };
 
 const themeScript = `

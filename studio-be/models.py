@@ -29,7 +29,7 @@ class AdVariant(BaseModel):
 class AdStoryboardSchema(BaseModel):
     brand_name: str = Field(..., description="The name of the brand.")
     primary_color: str = Field(..., description="The primary brand color in hex (e.g., #FFFFFF).")
-    variants: List[AdVariant] = Field(..., description="Exactly 3 distinct ad variants with different creative angles.")
+    variants: List[AdVariant] = Field(..., description="Exactly 1 ad variant.")
 
 
 class AdGenerationRequest(BaseModel):
@@ -45,4 +45,4 @@ class EditRequest(BaseModel):
     call_to_action: Optional[str] = Field(default=None, description="New CTA text.")
     music_track: Optional[str] = Field(default=None, description="New background music track name.")
     output_format: str = Field(default="16:9", description="Output format: '16:9', '9:16', or '1:1'.")
-    variant_index: int = Field(default=0, description="Which variant (0-2) to re-render.")
+    variant_index: int = Field(default=0, description="Which variant to re-render (always 0 now).")

@@ -57,8 +57,13 @@ def _build_caption_elements(words: list[dict], scene_time_offset: float) -> list
 
 
 def _build_logo_element(logo_url: str) -> dict | None:
-    """Returns a small logo overlay element if a logo URL is available."""
+    """Returns a small logo overlay element if a logo URL is publicly reachable."""
     if not logo_url:
+        return None
+    # Skip logo if it's a local/private address Creatomate can't reach
+    private = ("127.0.0.1", "localhost", "0.0.0.0", "192.168.", "data:")
+    if any(p in logo_url for p in private):
+        logger.warning(f"Skipping logo — not publicly reachable: {logo_url[:60]}")
         return None
     return {
         "type": "image",
@@ -91,7 +96,9 @@ async def render_video_ad(
     Returns:
         MP4 URL string
     """
-    if not CREATOMATE_API_KEY:
+    # Re-read at call time in case dotenv was loaded after module import
+    api_key = os.getenv("CREATOMATE_API_KEY") or CREATOMATE_API_KEY
+    if not api_key:
         logger.warning("CREATOMATE_API_KEY not set. Returning mock video URL.")
         return "https://creatomate.com/files/assets/demo.mp4"
 
@@ -102,6 +109,13 @@ async def render_video_ad(
 
     track_elements = []
     running_time = 0.0  # tracks current timeline position for caption offsets
+
+    def _is_public_url(url: str) -> bool:
+        """Returns True only if the URL is reachable by Creatomate's cloud servers."""
+        if not url:
+            return False
+        private = ("127.0.0.1", "localhost", "0.0.0.0", "192.168.", "10.", "172.")
+        return not any(p in url for p in private)
 
     for scene in completed_scenes:
         voice_data = scene.get("voice_data", {})
@@ -138,12 +152,20 @@ async def render_video_ad(
             ],
         }
 
-        # --- Audio element ---
-        audio_element = {"type": "audio", "source": audio_url, "time": 0} if audio_url else None
+        # --- Audio element (only if URL is publicly reachable by Creatomate) ---
+        audio_element = None
+        if _is_public_url(audio_url):
+            audio_element = {"type": "audio", "source": audio_url, "time": 0}
+        elif audio_url:
+            logger.warning(
+                f"Skipping audio in Creatomate render — URL is not publicly reachable: {audio_url}. "
+                "Set BACKEND_BASE_URL to a public address to enable voiceover."
+            )
 
         scene_elements = [image_element, headline_element]
         if audio_element:
             scene_elements.append(audio_element)
+
 
         scene_group = {
             "type": "composition",
@@ -197,9 +219,11 @@ async def render_video_ad(
 
     url = "https://api.creatomate.com/v1/renders"
     headers = {
-        "Authorization": f"Bearer {CREATOMATE_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+
+    logger.info(f"Sending Creatomate render: {len(track_elements)} track elements, format={output_format}")
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -215,16 +239,24 @@ async def render_video_ad(
                 poll_res = await client.get(poll_url, headers=headers)
                 poll_data = poll_res.json()
                 status = poll_data.get("status")
+                logger.info(f"Creatomate poll: status={status}")
                 if status == "succeeded":
-                    return poll_data.get("url", initial_url)
+                    video_url = poll_data.get("url", initial_url)
+                    logger.info(f"Creatomate render succeeded: {video_url}")
+                    return video_url
                 elif status == "failed":
                     err = poll_data.get("error_message") or poll_data.get("error")
-                    logger.error(f"Creatomate render failed: {err}")
-                    return "https://creatomate.com/files/assets/fallback.mp4"
+                    logger.error(f"Creatomate render FAILED: {err}")
+                    logger.error(f"Full Creatomate error response: {poll_data}")
+                    # Return empty string so frontend shows placeholder, not a broken URL
+                    return ""
 
             logger.warning("Creatomate render polling timed out.")
             return initial_url
 
     except Exception as e:
         logger.error(f"Creatomate render exception: {e}")
-        return "https://creatomate.com/files/assets/fallback.mp4"
+        import traceback
+        traceback.print_exc()
+        # Return empty string so frontend shows placeholder, not a broken URL
+        return ""

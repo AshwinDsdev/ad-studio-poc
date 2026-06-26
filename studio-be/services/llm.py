@@ -28,25 +28,18 @@ def generate_storyboard(scraped_data: dict) -> dict:
     prompt = f"""
 You are a world-class performance-marketing creative director specializing in high-converting video ads.
 
-Analyze the website content below and produce exactly 3 DISTINCT video ad storyboards — each with a 
-completely different creative angle and hook strategy. Diversity between variants is critical.
+Analyze the website content below and produce exactly 1 video ad storyboard. Choose the single most compelling creative angle for this product (e.g., "Pain Point Hook", "Social Proof Hook", or "Dream Outcome Hook") and use that as the variant_label.
 
-Required variant angles (use these labels exactly):
-1. "Pain Point Hook" — Open by agitating the viewer's core problem/frustration
-2. "Social Proof Hook" — Open with credibility signals (results, numbers, testimonials)  
-3. "Dream Outcome Hook" — Open with the aspirational end-state the product delivers
-
-For each variant, assign a Creative Score (0-100) based on:
+For the variant, assign a Creative Score (0-100) based on:
 - Hook strength (stops the scroll in 2 seconds): 40 pts
 - CTA clarity and urgency: 30 pts
 - Message-market fit given the brand: 30 pts
 
 Rules:
-- Each ad is 15-30 seconds total across 3-5 scenes
-- Voiceover scripts: short, punchy, conversational — no corporate speak
+- The ad is 15-30 seconds total across 3-5 scenes
+- Voiceover script: short, punchy, conversational — no corporate speak
 - Visual image prompts: ultra-detailed, cinematic, describe lighting, mood, subject, style
-- Scores MUST be different across variants (reflect genuine quality differences)
-- The best variant should score 75-90; worst should score 55-70
+- The variant should score 75-95 based on creative potential
 - primary_color for this brand is: {primary_color}
 - If hero images are available, reference them in scene 1 visual prompts: {', '.join(hero_images[:2]) if hero_images else 'none'}
 

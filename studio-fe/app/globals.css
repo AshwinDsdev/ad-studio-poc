@@ -908,3 +908,50 @@ body {
   .gallery-grid { grid-template-columns: 1fr; }
   .hero { padding: 60px 0 50px; }
 }
+
+/* ── Error Banner ────────────────────────────────── */
+.error-banner {
+  margin-top: 24px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  text-align: left;
+  animation: fadeUp 0.35s ease-out;
+  max-width: 640px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+[data-theme="light"] .error-banner {
+  background: rgba(220, 38, 38, 0.05);
+  border-color: rgba(220, 38, 38, 0.2);
+}
+
+.error-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.error-message-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.error-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--red);
+}
+
+.error-text {
+  font-size: 0.85rem;
+  color: var(--text-2);
+  line-height: 1.4;
+  word-break: break-word;
+}
+
