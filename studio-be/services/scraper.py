@@ -72,8 +72,14 @@ def _extract_hero_images(soup: BeautifulSoup, base_url: str) -> list[str]:
         full = urljoin(base_url, src)
         if full in images:
             continue
-        width = int(img.get("width", 0) or 0)
-        height = int(img.get("height", 0) or 0)
+        try:
+            width = int(str(img.get("width", 0)).replace("px", "").replace("%", "").strip() or 0)
+        except ValueError:
+            width = 0
+        try:
+            height = int(str(img.get("height", 0)).replace("px", "").replace("%", "").strip() or 0)
+        except ValueError:
+            height = 0
         cls = " ".join(img.get("class", [])).lower()
         is_hero = (
             width >= 400

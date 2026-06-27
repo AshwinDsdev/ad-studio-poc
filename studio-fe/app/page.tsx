@@ -1,7 +1,10 @@
 "use client";
 
 import { useState, useRef } from "react";
+import dynamic from "next/dynamic";
 import ThemeToggle from "./components/ThemeToggle";
+
+const VideoEditor = dynamic(() => import("./components/VideoEditor"), { ssr: false });
 
 // ---------------------------------------------------------------------------
 // Types
@@ -22,6 +25,7 @@ interface Variant {
   score_rationale: string;
   call_to_action: string;
   video_url: string;
+  video_source?: Record<string, any>;
   scenes: SceneData[];
   brand_kit: { logo_url: string; primary_color: string; hero_images: string[] };
   primary_color: string;
@@ -32,7 +36,7 @@ interface Variant {
 // Helpers
 // ---------------------------------------------------------------------------
 const BACKEND =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8765";
+  process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
 function scoreColor(score: number) {
   if (score >= 75) return "high";
@@ -159,8 +163,14 @@ function VariantCard({
       </div>
 
       {/* Video */}
-      <div className={`video-container ${ratioClass(activeFormat)}`}>
-        {videoUrl && videoUrl.startsWith("http") ? (
+      <div className={`video-container ${ratioClass(activeFormat)}`} style={{ minHeight: "400px" }}>
+        {variant.video_source ? (
+          <VideoEditor 
+            source={variant.video_source} 
+            publicToken={process.env.NEXT_PUBLIC_CREATOMATE_PUBLIC_TOKEN || ""} 
+            backendUrl={BACKEND}
+          />
+        ) : videoUrl && videoUrl.startsWith("http") ? (
           <video
             ref={videoRef}
             key={videoUrl}

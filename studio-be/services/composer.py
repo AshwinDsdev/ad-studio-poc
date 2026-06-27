@@ -40,10 +40,12 @@ def _build_caption_elements(words: list[dict], scene_time_offset: float) -> list
                 "fill_color": "#FFFFFF",
                 "stroke_color": "#000000",
                 "stroke_width": "2 vmin",
-                "font_size": "5 vmin",
+                "font_size": "4 vmin",
                 "font_weight": "700",
                 "x_alignment": "50%",
-                "y": "88%",
+                "y_alignment": "50%",
+                "y": "85%",
+                "width": "90%",
                 "time": round(start, 3),
                 "duration": duration,
                 "animations": [
@@ -78,7 +80,7 @@ async def render_video_ad(
     storyboard: dict,
     brand_kit: dict | None = None,
     output_format: str = "16:9",
-) -> str:
+) -> dict:
     """
     Builds a fully dynamic Creatomate composition and polls for the rendered MP4 URL.
 
@@ -89,11 +91,11 @@ async def render_video_ad(
         output_format: "16:9" | "9:16" | "1:1"
 
     Returns:
-        MP4 URL string
+        dict: {"video_url": str, "source": dict}
     """
     if not CREATOMATE_API_KEY:
         logger.warning("CREATOMATE_API_KEY not set. Returning mock video URL.")
-        return "https://creatomate.com/files/assets/demo.mp4"
+        return {"video_url": "https://creatomate.com/files/assets/demo.mp4", "source": {}}
 
     brand_kit = brand_kit or {}
     width, height = FORMAT_DIMENSIONS.get(output_format, (1920, 1080))
@@ -127,11 +129,13 @@ async def render_video_ad(
             "text": scene["text_overlay"],
             "fill_color": "#FFFFFF",
             "font_weight": "800",
-            "font_size": "6 vmin",
+            "font_size": "5.5 vmin",
             "stroke_color": "#000000",
             "stroke_width": "1.5 vmin",
-            "y": "75%",
+            "y_alignment": "50%",
+            "y": "65%",
             "x_alignment": "50%",
+            "width": "90%",
             "animations": [
                 {"type": "text-slide", "duration": "0.5 s", "time": "start"},
                 {"type": "fade", "duration": "0.3 s", "time": "end"},
@@ -216,15 +220,15 @@ async def render_video_ad(
                 poll_data = poll_res.json()
                 status = poll_data.get("status")
                 if status == "succeeded":
-                    return poll_data.get("url", initial_url)
+                    return {"video_url": poll_data.get("url", initial_url), "source": payload["source"]}
                 elif status == "failed":
                     err = poll_data.get("error_message") or poll_data.get("error")
                     logger.error(f"Creatomate render failed: {err}")
-                    return "https://creatomate.com/files/assets/fallback.mp4"
+                    return {"video_url": "https://creatomate.com/files/assets/fallback.mp4", "source": payload["source"]}
 
             logger.warning("Creatomate render polling timed out.")
-            return initial_url
+            return {"video_url": initial_url, "source": payload["source"]}
 
     except Exception as e:
         logger.error(f"Creatomate render exception: {e}")
-        return "https://creatomate.com/files/assets/fallback.mp4"
+        return {"video_url": "https://creatomate.com/files/assets/fallback.mp4", "source": payload["source"]}

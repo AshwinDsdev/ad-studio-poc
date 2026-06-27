@@ -99,7 +99,9 @@ async def generate_ad_pipeline(job_id: str, url: str):
             _push(job_id, pct, f"Rendering variant {i + 1}/{len(variants_raw)}: \"{variant.get('variant_label', '')}\"...")
 
             sorted_scenes = sorted(scenes, key=lambda s: s["scene_number"])
-            video_url = await render_video_ad(sorted_scenes, variant, brand_kit, output_format="16:9")
+            render_result = await render_video_ad(sorted_scenes, variant, brand_kit, output_format="16:9")
+            video_url = render_result.get("video_url", "")
+            video_source = render_result.get("source", {})
 
             completed_variants.append({
                 "variant_index": i,
@@ -109,6 +111,7 @@ async def generate_ad_pipeline(job_id: str, url: str):
                 "score_rationale": variant.get("score_rationale", ""),
                 "call_to_action": variant.get("call_to_action", "Learn More"),
                 "video_url": video_url,
+                "video_source": video_source,
                 "scenes": sorted_scenes,
                 "brand_kit": brand_kit,
                 "primary_color": primary_color,
@@ -133,8 +136,49 @@ async def generate_ad_pipeline(job_id: str, url: str):
 
 
 # ---------------------------------------------------------------------------
-# Routes
+# Proxy for Frontend Video Editor (CORS bypass)
 # ---------------------------------------------------------------------------
+
+import mimetypes
+from fastapi.responses import StreamingResponse
+
+@app.get("/api/proxy")
+async def proxy_media(url: str):
+    """
+    Proxies external images/audio to the frontend to bypass browser CORS blocks
+    when loading the Creatomate Preview SDK.
+    """
+    import httpx
+    try:
+        # Determine content type
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            head_res = await client.head(url)
+            content_type = head_res.headers.get("content-type", "")
+
+        if not content_type or "octet-stream" in content_type:
+            guessed, _ = mimetypes.guess_type(url)
+            if guessed:
+                content_type = guessed
+            else:
+                content_type = "application/octet-stream"
+
+        async def stream_generator():
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                async with client.stream("GET", url) as response:
+                    async for chunk in response.aiter_bytes():
+                        yield chunk
+
+        return StreamingResponse(
+            stream_generator(),
+            media_type=content_type,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Cache-Control": "public, max-age=31536000"
+            }
+        )
+    except Exception as e:
+        return {"error": str(e)}
+
 
 @app.post("/api/ads")
 async def create_ad(req: AdGenerationRequest, background_tasks: BackgroundTasks):
@@ -232,16 +276,19 @@ async def edit_ad(job_id: str, edit: EditRequest):
     }
 
     from services.composer import render_video_ad
-    new_video_url = await render_video_ad(
+    render_result = await render_video_ad(
         scenes, storyboard_for_render, brand_kit, output_format=edit.output_format
     )
+    new_video_url = render_result.get("video_url", "")
+    new_video_source = render_result.get("source", {})
 
     # Update in-memory state
     variant["video_url"] = new_video_url
+    variant["video_source"] = new_video_source
     if state:
         progress_streams[job_id]["variants"][variant_index] = variant
 
-    return {"video_url": new_video_url, "variant_index": variant_index}
+    return {"video_url": new_video_url, "video_source": new_video_source, "variant_index": variant_index}
 
 
 @app.get("/api/ads/{job_id}/render")
@@ -265,6 +312,6 @@ async def render_format(job_id: str, format: str = "16:9", variant_index: int = 
     }
 
     from services.composer import render_video_ad
-    video_url = await render_video_ad(scenes, storyboard_for_render, brand_kit, output_format=format)
+    render_result = await render_video_ad(scenes, storyboard_for_render, brand_kit, output_format=format)
 
-    return {"video_url": video_url, "format": format, "variant_index": variant_index}
+    return {"video_url": render_result.get("video_url", ""), "video_source": render_result.get("source", {}), "format": format, "variant_index": variant_index}

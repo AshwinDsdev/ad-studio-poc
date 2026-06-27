@@ -9,6 +9,8 @@ logger = logging.getLogger(__name__)
 
 FAL_API_KEY = os.getenv("FAL_API_KEY")
 HF_API_KEY = os.getenv("HF_API_KEY")
+CLOUDFLARE_WORKER_API_KEY = os.getenv("CLOUDFLARE_WORKER_API_KEY")
+CLOUDFLARE_WORKER_URL = "https://free-image-generation-ap.ashwindatasense.workers.dev/"
 
 
 async def upload_to_tmpfiles(file_bytes: bytes, filename: str) -> str:
@@ -116,15 +118,38 @@ async def generate_image_hf(prompt: str) -> str:
         return image_url
 
 
+async def generate_image_cloudflare(prompt: str) -> str:
+    """Generate image via custom Cloudflare worker."""
+    headers = {"Authorization": f"Bearer {CLOUDFLARE_WORKER_API_KEY}"} if CLOUDFLARE_WORKER_API_KEY else {}
+    payload = {"prompt": prompt}
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(CLOUDFLARE_WORKER_URL, json=payload, headers=headers)
+        response.raise_for_status()
+        image_url = await upload_to_tmpfiles(response.content, "cf_image.jpg")
+        if not image_url:
+            raise ValueError("Failed to upload Cloudflare image to tmpfiles")
+        return image_url
+
+
 async def generate_image(prompt: str, hero_image_hint: str = "") -> str:
     """
-    Generates a scene image. Tries Fal.ai first, then HF, then hero/placeholder.
+    Generates a scene image. Tries hero image from site first, then AI generation.
     """
+    if hero_image_hint:
+        logger.info("Using scraped hero image instead of AI generation.")
+        return hero_image_hint
+
     if FAL_API_KEY:
         try:
             return await generate_image_fal(prompt)
         except Exception as e:
             logger.error(f"Fal.ai image generation failed: {e}")
+
+    try:
+        return await generate_image_cloudflare(prompt)
+    except Exception as e:
+        logger.error(f"Cloudflare Worker image generation failed: {e}")
 
     if HF_API_KEY:
         try:
@@ -132,9 +157,12 @@ async def generate_image(prompt: str, hero_image_hint: str = "") -> str:
         except Exception as e:
             logger.error(f"HuggingFace image generation failed: {e}")
 
-    if hero_image_hint:
-        logger.info("Using scraped hero image as fallback.")
-        return hero_image_hint
+    try:
+        import urllib.parse
+        encoded_prompt = urllib.parse.quote(prompt)
+        return f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1920&height=1080&nologo=true"
+    except Exception as e:
+        logger.error(f"Pollinations generation failed: {e}")
 
     logger.warning("No image API available. Using placeholder.")
     return "https://placehold.co/1920x1080/1a1a2e/6366f1?text=Ad+Scene"
