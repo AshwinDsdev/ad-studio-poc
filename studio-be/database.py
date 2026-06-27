@@ -67,7 +67,16 @@ class _TursoAdapter:
         self._client = libsql_client.create_client_sync(url=url, auth_token=token)
 
     def execute(self, sql: str, params: tuple = ()):
-        return self._client.execute(sql, params)
+        try:
+            return self._client.execute(sql, params)
+        except KeyError as e:
+            if str(e) == "'result'":
+                raise RuntimeError(
+                    "Turso connection failed or returned an error response. "
+                    "Make sure your TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are valid, "
+                    "or comment them out in your .env file to use the local SQLite database."
+                ) from e
+            raise
 
 
 def get_db_client():

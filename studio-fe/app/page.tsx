@@ -32,7 +32,7 @@ interface Variant {
 // Helpers
 // ---------------------------------------------------------------------------
 const BACKEND =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8765";
+  process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
 function scoreColor(score: number) {
   if (score >= 75) return "high";
@@ -171,6 +171,12 @@ function VariantCard({
           >
             <source src={videoUrl} type="video/mp4" />
           </video>
+        ) : videoUrl === "" ? (
+          <div className="video-placeholder" style={{ flexDirection: "column", gap: 8 }}>
+            <span style={{ fontSize: "2rem" }}>⚠️</span>
+            <span style={{ fontWeight: 600 }}>Video render failed</span>
+            <span style={{ fontSize: "0.8rem", opacity: 0.7 }}>Check the backend logs for the Creatomate error</span>
+          </div>
         ) : (
           <div className="video-placeholder">
             <span className="spinner" />
@@ -178,6 +184,7 @@ function VariantCard({
           </div>
         )}
       </div>
+
 
       {/* Footer */}
       <div className="card-footer">
@@ -305,6 +312,7 @@ export default function Home() {
   const [jobId, setJobId] = useState("");
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [variants, setVariants] = useState<Variant[]>([]);
 
@@ -314,6 +322,7 @@ export default function Home() {
     setIsGenerating(true);
     setProgress(2);
     setStatus("Connecting to backend…");
+    setError("");
     setVariants([]);
     setJobId("");
 
@@ -341,7 +350,11 @@ export default function Home() {
 
           if (vars.length > 0) setVariants(vars);
 
-          if (stat === "SUCCESS" || stat.startsWith("FAILED")) {
+          if (stat.startsWith("FAILED")) {
+            setError(stat.replace("FAILED:", "").trim());
+            es.close();
+            setIsGenerating(false);
+          } else if (stat === "SUCCESS") {
             es.close();
             setIsGenerating(false);
           }
@@ -351,12 +364,12 @@ export default function Home() {
       };
 
       es.onerror = () => {
-        setStatus("Lost connection to progress stream.");
+        setError("Lost connection to progress stream.");
         es.close();
         setIsGenerating(false);
       };
     } catch {
-      setStatus(`Cannot reach backend at ${BACKEND}. Is Uvicorn running?`);
+      setError(`Cannot reach backend at ${BACKEND}. Is Uvicorn running?`);
       setIsGenerating(false);
     }
   };
@@ -391,18 +404,18 @@ export default function Home() {
       {!showGallery && (
         <section className="hero">
           <div className="container">
-            <div className="hero-eyebrow">⚡ URL → 3 Scored Ads in &lt; 3 min</div>
+            <div className="hero-eyebrow">⚡ URL → Scored Ad in &lt; 1 min</div>
 
             <h1 className="hero-title">
               Turn any URL into{" "}
-              <span className="gradient-text">3 winning video ads</span>
+              <span className="gradient-text">a winning video ad</span>
               <br />
               with AI Creative Scoring
             </h1>
 
             <p className="hero-sub">
-              Paste a landing page. Get three scored, captioned, multi-format video ads — each with a
-              different creative angle. No brief. No agency.
+              Paste a landing page. Get a scored, captioned, multi-format video ad — tailored with a
+              winning creative angle. No brief. No agency.
             </p>
 
             <p className="hero-proof">
@@ -434,6 +447,17 @@ export default function Home() {
               </div>
             </div>
 
+            {/* Error Banner */}
+            {error && (
+              <div className="error-banner">
+                <span className="error-icon">⚠️</span>
+                <div className="error-message-content">
+                  <span className="error-title">Generation Failed</span>
+                  <span className="error-text">{error}</span>
+                </div>
+              </div>
+            )}
+
             {/* Progress */}
             {showProgress && (
               <div className="progress-section">
@@ -456,7 +480,7 @@ export default function Home() {
         <section className="gallery-section">
           <div className="container">
             <div className="gallery-header">
-              <h2 className="gallery-title">Your 3 Ad Variants</h2>
+              <h2 className="gallery-title">Your Ad Variant</h2>
               <p className="gallery-sub">
                 Scored by AI · Edit scenes · Switch format · Download MP4
               </p>
@@ -468,7 +492,7 @@ export default function Home() {
                   key={v.variant_index}
                   variant={v}
                   jobId={jobId}
-                  isTop={i === topVariantIdx}
+                  isTop={variants.length > 1 && i === topVariantIdx}
                 />
               ))}
             </div>
@@ -508,10 +532,10 @@ export default function Home() {
 
                 <div className="feature-card">
                   <div className="feature-icon green">🔀</div>
-                  <div className="feature-title">3 Variants, 3 Angles</div>
+                  <div className="feature-title">Tailored Creative Angle</div>
                   <div className="feature-desc">
-                    Pain Point · Social Proof · Dream Outcome — three distinct creative concepts
-                    from one URL, all in one generation.
+                    Pain Point, Social Proof, or Dream Outcome — a tailored creative concept
+                    optimized for your brand from a single URL.
                   </div>
                 </div>
 

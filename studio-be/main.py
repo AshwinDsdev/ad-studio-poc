@@ -1,13 +1,19 @@
 import uuid
 import asyncio
 import json
+import os
+from pathlib import Path
 from fastapi import FastAPI, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 from models import AdGenerationRequest, EditRequest
 from database import get_db_client
 from services.scraper import scrape_url
 from services.llm import generate_storyboard
+
+AUDIO_CACHE_DIR = Path(__file__).parent / "audio_cache"
+AUDIO_CACHE_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="AdStudio API", version="0.2.0")
 
@@ -18,6 +24,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def startup_event():
+    from database import init_db
+    init_db()
 
 # In-memory SSE state per job_id
 # shape: { job_id: { "progress": int, "status": str, "variants": [...] } }
@@ -61,8 +73,8 @@ async def generate_ad_pipeline(job_id: str, url: str):
         scraped_data = await scrape_url(url)
         brand_kit = scraped_data.get("brand_kit", {})
 
-        # Step 2: LLM storyboard (3 variants)
-        _push(job_id, 30, "Writing 3 creative ad concepts with AI...")
+        # Step 2: LLM storyboard (1 variant)
+        _push(job_id, 30, "Writing creative ad concept with AI...")
         storyboard = await asyncio.to_thread(generate_storyboard, scraped_data)
 
         variants_raw = storyboard.get("variants", [])
@@ -74,17 +86,20 @@ async def generate_ad_pipeline(job_id: str, url: str):
             v["primary_color"] = primary_color
             v["brand_name"] = brand_name
 
-        _push(job_id, 45, f"Generating media assets for {len(variants_raw)} ad variants in parallel...")
+        _push(job_id, 45, "Generating media assets for ad variant...")
 
         # Step 3: Process all scenes for all variants concurrently
         from services.media_gen import process_scene
 
         async def process_variant_scenes(variant: dict) -> list:
-            scene_tasks = [
-                process_scene(scene, brand_kit)
-                for scene in variant.get("scenes", [])
-            ]
-            return await asyncio.gather(*scene_tasks)
+            results = []
+            scenes_list = variant.get("scenes", [])
+            for idx, scene in enumerate(scenes_list):
+                res = await process_scene(scene, brand_kit)
+                results.append(res)
+                if idx < len(scenes_list) - 1:
+                    await asyncio.sleep(2.0)
+            return results
 
         all_variant_scenes = await asyncio.gather(
             *[process_variant_scenes(v) for v in variants_raw]
@@ -96,7 +111,10 @@ async def generate_ad_pipeline(job_id: str, url: str):
         completed_variants = []
         for i, (variant, scenes) in enumerate(zip(variants_raw, all_variant_scenes)):
             pct = 65 + int((i / len(variants_raw)) * 25)
-            _push(job_id, pct, f"Rendering variant {i + 1}/{len(variants_raw)}: \"{variant.get('variant_label', '')}\"...")
+            if len(variants_raw) == 1:
+                _push(job_id, pct, f"Rendering video: \"{variant.get('variant_label', '')}\"...")
+            else:
+                _push(job_id, pct, f"Rendering variant {i + 1}/{len(variants_raw)}: \"{variant.get('variant_label', '')}\"...")
 
             sorted_scenes = sorted(scenes, key=lambda s: s["scene_number"])
             video_url = await render_video_ad(sorted_scenes, variant, brand_kit, output_format="16:9")
@@ -129,6 +147,8 @@ async def generate_ad_pipeline(job_id: str, url: str):
         _push(job_id, 100, "SUCCESS", variants=completed_variants)
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         _push(job_id, 0, f"FAILED: {str(e)}")
 
 
@@ -150,6 +170,19 @@ async def create_ad(req: AdGenerationRequest, background_tasks: BackgroundTasks)
     background_tasks.add_task(generate_ad_pipeline, job_id, req.url)
 
     return {"job_id": job_id, "message": "Ad generation started"}
+
+
+@app.get("/api/audio/{filename}")
+async def serve_audio(filename: str):
+    """
+    Serves generated MP3 audio files from the local audio_cache directory.
+    Creatomate fetches these URLs when rendering video.
+    """
+    filepath = AUDIO_CACHE_DIR / filename
+    if not filepath.exists() or not filepath.is_file():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    return FileResponse(str(filepath), media_type="audio/mpeg")
 
 
 @app.get("/api/ads/stream/{job_id}")
