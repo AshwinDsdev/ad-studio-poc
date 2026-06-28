@@ -12,11 +12,16 @@ from database import get_db_client
 from services.scraper import scrape_url
 from services.llm import generate_storyboard
 
-if os.getenv("VERCEL"):
+AUDIO_CACHE_DIR = Path(__file__).parent / "audio_cache"
+try:
+    AUDIO_CACHE_DIR.mkdir(exist_ok=True)
+    # Test writability
+    test_file = AUDIO_CACHE_DIR / f".test_write_{os.getpid()}"
+    test_file.write_text("")
+    test_file.unlink()
+except Exception:
     AUDIO_CACHE_DIR = Path("/tmp/audio_cache")
-else:
-    AUDIO_CACHE_DIR = Path(__file__).parent / "audio_cache"
-AUDIO_CACHE_DIR.mkdir(exist_ok=True)
+    AUDIO_CACHE_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="AdStudio API", version="0.2.0")
 

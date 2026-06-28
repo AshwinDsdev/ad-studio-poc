@@ -14,8 +14,18 @@ logger = logging.getLogger(__name__)
 TURSO_URL = os.getenv("TURSO_DATABASE_URL", "")
 TURSO_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
 
-# If running on Vercel, use /tmp as it is the only writeable directory
-if os.getenv("VERCEL"):
+def _is_dir_writable(path: str) -> bool:
+    try:
+        test_file = os.path.join(path, f".test_write_{os.getpid()}")
+        with open(test_file, "w") as f:
+            f.write("")
+        os.remove(test_file)
+        return True
+    except Exception:
+        return False
+
+# If running on Vercel/serverless (read-only filesystem), use /tmp/adstudio.db
+if not _is_dir_writable(os.path.dirname(__file__)):
     LOCAL_DB_PATH = "/tmp/adstudio.db"
     # Copy the bundled database to /tmp if it doesn't exist yet
     original_db = os.path.join(os.path.dirname(__file__), "adstudio.db")

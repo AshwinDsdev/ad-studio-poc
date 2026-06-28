@@ -15,11 +15,16 @@ FORMAT_DIMENSIONS = {
     "1:1": (1080, 1080),
 }
 
-if os.getenv("VERCEL"):
+AUDIO_CACHE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "audio_cache"))
+try:
+    os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
+    test_file = os.path.join(AUDIO_CACHE_DIR, f".test_write_{os.getpid()}")
+    with open(test_file, "w") as f:
+        f.write("")
+    os.remove(test_file)
+except Exception:
     AUDIO_CACHE_DIR = "/tmp/audio_cache"
-else:
-    AUDIO_CACHE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "audio_cache"))
-os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
+    os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
 
 BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "http://127.0.0.1:8000")
 
