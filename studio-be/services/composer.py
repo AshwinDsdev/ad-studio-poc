@@ -286,9 +286,27 @@ async def render_video_ad(
         out_filename = f"final_{uuid.uuid4().hex}.mp4"
         out_filepath = os.path.join(AUDIO_CACHE_DIR, out_filename)
         
-        logger.info(f"Writing moviepy video to {out_filepath}...")
-        # Write file. We use logger instead of terminal output
-        final_video.write_videofile(out_filepath, fps=24, codec="libx264", audio_codec="aac", ffmpeg_params=["-pix_fmt", "yuv420p", "-movflags", "faststart"], logger=None)
+        # MoviePy's write_videofile might write internal temporary files to the current working directory.
+        # Since the deployment root (/var/task) is read-only, we temporarily switch the working directory
+        # to the writeable AUDIO_CACHE_DIR (/tmp/audio_cache on Vercel) during execution.
+        old_cwd = os.getcwd()
+        os.chdir(AUDIO_CACHE_DIR)
+        
+        try:
+            logger.info(f"Writing moviepy video to {out_filepath}...")
+            temp_audio_name = f"temp_{uuid.uuid4().hex}.mp3"
+            final_video.write_videofile(
+                out_filepath,
+                fps=24,
+                codec="libx264",
+                audio_codec="aac",
+                ffmpeg_params=["-pix_fmt", "yuv420p", "-movflags", "faststart"],
+                logger=None,
+                temp_audiofile=temp_audio_name,
+                remove_temp=True
+            )
+        finally:
+            os.chdir(old_cwd)
         
         video_url = f"{BACKEND_BASE_URL}/api/audio/{out_filename}"
         
