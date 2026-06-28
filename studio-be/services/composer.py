@@ -214,6 +214,23 @@ async def render_video_ad(
     brand_kit: dict | None = None,
     output_format: str = "16:9",
 ) -> dict:
+    # On serverless platforms like Vercel, copy FFmpeg to a writable location and set execute permissions
+    if os.name != 'nt':
+        try:
+            import imageio_ffmpeg
+            ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+            tmp_ffmpeg = "/tmp/ffmpeg"
+            if not os.path.exists(tmp_ffmpeg):
+                import shutil
+                import stat
+                os.makedirs("/tmp", exist_ok=True)
+                shutil.copy2(ffmpeg_exe, tmp_ffmpeg)
+                os.chmod(tmp_ffmpeg, stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO)
+            os.environ["IMAGEIO_FFMPEG_EXE"] = tmp_ffmpeg
+            logger.info(f"FFmpeg path overridden to {tmp_ffmpeg}")
+        except Exception as ex:
+            logger.error(f"Failed to configure FFmpeg executable in /tmp: {ex}")
+
     # Import moviepy inside the function to ensure it doesn't break startup if missing
     from moviepy import ImageClip, AudioFileClip, concatenate_videoclips
     
