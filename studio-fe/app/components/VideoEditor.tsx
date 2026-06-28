@@ -331,7 +331,12 @@ export default function VideoEditor({ videoUrl }: { videoUrl: string }) {
     }
 
     // Use our custom Next.js API route which properly forwards Range headers.
-    const proxiedUrl = `${window.location.origin}/api/video_stream/${filename}${backendOrigin ? `?backend=${encodeURIComponent(backendOrigin)}` : ''}`;
+    // If the backend is running locally (localhost/127.0.0.1), we load it directly in the browser
+    // since the Vercel cloud server cannot access the user's localhost.
+    const isLocal = cleanUrl.includes('localhost') || cleanUrl.includes('127.0.0.1');
+    const proxiedUrl = isLocal
+      ? cleanUrl
+      : `${window.location.origin}/api/video_stream/${filename}${backendOrigin ? `?backend=${encodeURIComponent(backendOrigin)}` : ''}`;
 
     const load = async () => {
       try {
