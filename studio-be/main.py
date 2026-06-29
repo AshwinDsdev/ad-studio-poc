@@ -2,6 +2,8 @@ import uuid
 import asyncio
 import json
 import os
+import logging
+import sys
 from pathlib import Path
 from fastapi import FastAPI, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +24,12 @@ try:
 except Exception:
     AUDIO_CACHE_DIR = Path("/tmp/audio_cache")
     AUDIO_CACHE_DIR.mkdir(exist_ok=True)
+
+logging.basicConfig(
+    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="AdStudio API", version="0.2.0")
 
@@ -67,6 +75,28 @@ def _push(job_id: str, progress: int, status: str, variants: list | None = None)
     )
 
 
+def _runtime_snapshot() -> dict:
+    ffmpeg_path = os.getenv("IMAGEIO_FFMPEG_EXE", "")
+    ffmpeg_exists = bool(ffmpeg_path) and Path(ffmpeg_path).exists()
+    return {
+        "service": "adstudio-backend",
+        "version": app.version,
+        "python_version": sys.version.split()[0],
+        "backend_base_url": os.getenv("BACKEND_BASE_URL", "http://127.0.0.1:8000"),
+        "log_level": os.getenv("LOG_LEVEL", "INFO"),
+        "audio_cache_dir": str(AUDIO_CACHE_DIR),
+        "audio_cache_exists": AUDIO_CACHE_DIR.exists(),
+        "audio_cache_writable": os.access(AUDIO_CACHE_DIR, os.W_OK),
+        "ffmpeg_env_path": ffmpeg_path,
+        "ffmpeg_env_path_exists": ffmpeg_exists,
+        "vercel_env": os.getenv("VERCEL_ENV", ""),
+        "vercel_region": os.getenv("VERCEL_REGION", ""),
+        "vercel_url": os.getenv("VERCEL_URL", ""),
+        "git_commit_sha": os.getenv("VERCEL_GIT_COMMIT_SHA", ""),
+        "git_commit_ref": os.getenv("VERCEL_GIT_COMMIT_REF", ""),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Generation pipeline
 # ---------------------------------------------------------------------------
@@ -81,6 +111,7 @@ async def generate_ad_pipeline(job_id: str, url: str):
       5. Stream progress to frontend via SSE
     """
     try:
+        logger.info("Starting ad generation pipeline for job %s and url %s", job_id, url)
         # Step 1: Scrape
         _push(job_id, 10, "Scraping website & extracting brand assets...")
         scraped_data = await scrape_url(url)
@@ -117,6 +148,7 @@ async def generate_ad_pipeline(job_id: str, url: str):
         all_variant_scenes = await asyncio.gather(
             *[process_variant_scenes(v) for v in variants_raw]
         )
+        logger.info("Media generation complete for job %s with %s variant(s)", job_id, len(all_variant_scenes))
 
         # Step 4: Render each variant
         from services.composer import render_video_ad
@@ -133,6 +165,15 @@ async def generate_ad_pipeline(job_id: str, url: str):
             render_result = await render_video_ad(sorted_scenes, variant, brand_kit, output_format="16:9")
             video_url = render_result.get("video_url", "")
             video_source = render_result.get("source", {})
+            render_error = render_result.get("error", "")
+            logger.info(
+                "Render finished for job %s variant %s with video_url=%s",
+                job_id,
+                i,
+                video_url,
+            )
+            if not video_url:
+                raise RuntimeError(render_error or f"Final render returned no video URL for variant {i}")
 
             completed_variants.append({
                 "variant_index": i,
@@ -143,6 +184,7 @@ async def generate_ad_pipeline(job_id: str, url: str):
                 "call_to_action": variant.get("call_to_action", "Learn More"),
                 "video_url": video_url,
                 "video_source": video_source,
+                "render_error": render_error,
                 "scenes": sorted_scenes,
                 "brand_kit": brand_kit,
                 "primary_color": primary_color,
@@ -161,11 +203,22 @@ async def generate_ad_pipeline(job_id: str, url: str):
         )
 
         _push(job_id, 100, "SUCCESS", variants=completed_variants)
+        logger.info("Ad generation pipeline completed successfully for job %s", job_id)
 
     except Exception as e:
         import traceback
         traceback.print_exc()
+        logger.exception("Ad generation pipeline failed for job %s", job_id)
         _push(job_id, 0, f"FAILED: {str(e)}")
+
+
+@app.get("/api/debug/runtime")
+async def debug_runtime():
+    """
+    Safe runtime diagnostics for verifying which deployment/config is live.
+    Excludes secrets and focuses on resolved environment and filesystem state.
+    """
+    return _runtime_snapshot()
 
 
 # ---------------------------------------------------------------------------
@@ -380,14 +433,21 @@ async def edit_ad(job_id: str, edit: EditRequest):
     )
     new_video_url = render_result.get("video_url", "")
     new_video_source = render_result.get("source", {})
+    render_error = render_result.get("error", "")
 
     # Update in-memory state
     variant["video_url"] = new_video_url
     variant["video_source"] = new_video_source
+    variant["render_error"] = render_error
     if state:
         progress_streams[job_id]["variants"][variant_index] = variant
 
-    return {"video_url": new_video_url, "video_source": new_video_source, "variant_index": variant_index}
+    return {
+        "video_url": new_video_url,
+        "video_source": new_video_source,
+        "variant_index": variant_index,
+        "error": render_error,
+    }
 
 
 @app.get("/api/ads/{job_id}/render")
@@ -413,4 +473,10 @@ async def render_format(job_id: str, format: str = "16:9", variant_index: int = 
     from services.composer import render_video_ad
     render_result = await render_video_ad(scenes, storyboard_for_render, brand_kit, output_format=format)
 
-    return {"video_url": render_result.get("video_url", ""), "video_source": render_result.get("source", {}), "format": format, "variant_index": variant_index}
+    return {
+        "video_url": render_result.get("video_url", ""),
+        "video_source": render_result.get("source", {}),
+        "format": format,
+        "variant_index": variant_index,
+        "error": render_result.get("error", ""),
+    }

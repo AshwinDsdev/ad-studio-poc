@@ -26,6 +26,7 @@ interface Variant {
   call_to_action: string;
   video_url: string;
   video_source?: Record<string, any>;
+  render_error?: string;
   scenes: SceneData[];
   brand_kit: { logo_url: string; primary_color: string; hero_images: string[] };
   primary_color: string;
@@ -73,6 +74,7 @@ function VariantCard({
   const [showAdvancedEditor, setShowAdvancedEditor] = useState(false);
   const [scenes, setScenes] = useState<SceneData[]>(variant.scenes);
   const [rerendering, setRerendering] = useState(false);
+  const [renderError, setRenderError] = useState(variant.render_error ?? "");
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const handleFormatSwitch = async (fmt: string) => {
@@ -80,6 +82,7 @@ function VariantCard({
     setActiveFormat(fmt);
     if (fmt === "16:9") {
       setVideoUrl(variant.video_url);
+      setRenderError(variant.render_error ?? "");
       return;
     }
     setFormatLoading(true);
@@ -88,9 +91,16 @@ function VariantCard({
         `${BACKEND}/api/ads/${jobId}/render?format=${encodeURIComponent(fmt)}&variant_index=${variant.variant_index}`
       );
       const data = await r.json();
-      if (data.video_url) setVideoUrl(data.video_url);
+      if (data.video_url) {
+        setVideoUrl(data.video_url);
+        setRenderError("");
+      } else if (data.error) {
+        setVideoUrl("");
+        setRenderError(data.error);
+      }
     } catch {
-      // fall back silently
+      setVideoUrl("");
+      setRenderError("Format re-render request failed before the backend returned a video.");
     } finally {
       setFormatLoading(false);
     }
@@ -111,10 +121,15 @@ function VariantCard({
       const data = await r.json();
       if (data.video_url) {
         setVideoUrl(data.video_url);
+        setRenderError("");
         setShowEditor(false);
+      } else if (data.error) {
+        setVideoUrl("");
+        setRenderError(data.error);
       }
     } catch {
-      // ignore
+      setVideoUrl("");
+      setRenderError("Scene re-render request failed before the backend returned a video.");
     } finally {
       setRerendering(false);
     }
@@ -182,7 +197,9 @@ function VariantCard({
           <div className="video-placeholder" style={{ flexDirection: "column", gap: 8 }}>
             <span style={{ fontSize: "2rem" }}>⚠️</span>
             <span style={{ fontWeight: 600 }}>Video render failed</span>
-            <span style={{ fontSize: "0.8rem", opacity: 0.7 }}>Check the backend logs for the Creatomate error</span>
+            <span style={{ fontSize: "0.8rem", opacity: 0.7 }}>
+              {renderError || "No render details were returned by the backend."}
+            </span>
           </div>
         ) : (
           <div className="video-placeholder">
@@ -356,12 +373,20 @@ export default function Home() {
           const vars: Variant[] = msg.variants ?? [];
 
           setProgress(pct);
-          setStatus(stat);
+          if (stat === "SUCCESS" && vars.some((v) => !v.video_url)) {
+            setStatus("FAILED: Backend returned SUCCESS with an empty video_url. This usually means the live backend is running stale code or missing the latest render error propagation fix.");
+          } else {
+            setStatus(stat);
+          }
 
           if (vars.length > 0) setVariants(vars);
 
           if (stat.startsWith("FAILED")) {
             setError(stat.replace("FAILED:", "").trim());
+            es.close();
+            setIsGenerating(false);
+          } else if (stat === "SUCCESS" && vars.some((v) => !v.video_url)) {
+            setError("Backend returned SUCCESS with an empty video_url. Check that the live backend has the latest deployment and inspect /api/debug/runtime on that backend.");
             es.close();
             setIsGenerating(false);
           } else if (stat === "SUCCESS") {

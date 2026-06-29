@@ -3,6 +3,8 @@ import asyncio
 import logging
 import uuid
 import httpx
+import traceback
+from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 import textwrap
 
@@ -56,7 +58,9 @@ def _make_fallback_image(width: int = 1920, height: int = 1080, color: str = "#1
 def _download_image_to_local(image_url: str) -> str:
     """If the image_url is a local path (starts with BACKEND), return the file path.
     Otherwise, download it using httpx with browser-like headers to avoid 403s from CDNs.
-    Non-raster responses (SVG, HTML, etc.) are replaced with a solid-color fallback."""
+    Non-raster responses (SVG, HTML, etc.) are replaced with a solid-color fallback.
+    Remote raster responses are normalized through Pillow so the on-disk extension
+    matches the actual bytes MoviePy/imageio will later try to read."""
     if image_url.startswith(BACKEND_BASE_URL):
         filename = image_url.split("/")[-1]
         local_path = os.path.join(AUDIO_CACHE_DIR, filename)
@@ -102,9 +106,24 @@ def _download_image_to_local(image_url: str) -> str:
                     f"(got: {content_preview!r}...). Using solid-color fallback."
                 )
                 return _make_fallback_image()
-            with open(local_path, "wb") as f:
-                f.write(content)
-        logger.info(f"Downloaded image ({len(content)//1024}KB) from {image_url}")
+            try:
+                with Image.open(BytesIO(content)) as img:
+                    normalized = img.convert("RGB")
+                    normalized.save(local_path, format="JPEG", quality=92)
+            except Exception as decode_error:
+                logger.warning(
+                    "Pillow failed to normalize downloaded image %s: %s. "
+                    "Falling back to solid-color image.",
+                    image_url,
+                    decode_error,
+                )
+                return _make_fallback_image()
+        logger.info(
+            "Downloaded and normalized image (%sKB) from %s -> %s",
+            len(content) // 1024,
+            image_url,
+            local_path,
+        )
         return local_path
     except Exception as e:
         logger.error(f"Failed to download image {image_url}: {e}")
@@ -214,6 +233,12 @@ async def render_video_ad(
     brand_kit: dict | None = None,
     output_format: str = "16:9",
 ) -> dict:
+    logger.info(
+        "Starting final video render with %s scenes in format %s",
+        len(completed_scenes),
+        output_format,
+    )
+
     # On serverless platforms like Vercel, copy FFmpeg to a writable location and set execute permissions
     if os.name != 'nt':
         try:
@@ -239,17 +264,31 @@ async def render_video_ad(
     primary_color = storyboard.get("primary_color", brand_kit.get("primary_color", "#5e6ad2"))
     
     clips = []
-    
-    for scene in completed_scenes:
+
+    for idx, scene in enumerate(completed_scenes, start=1):
         image_url = scene["image_url"]
         audio_url = scene.get("voice_data", {}).get("audio_url", "")
         text = scene["text_overlay"]
-        
+        scene_number = scene.get("scene_number", idx)
+
+        logger.info(
+            "Preparing scene %s/%s (scene_number=%s): image=%s audio=%s duration=%s",
+            idx,
+            len(completed_scenes),
+            scene_number,
+            image_url,
+            audio_url,
+            scene.get("duration_seconds", 5.0),
+        )
+
         local_img = _download_image_to_local(image_url)
         if not local_img:
+            logger.warning("Skipping scene %s because image download returned empty path", scene_number)
             continue
+        logger.info("Scene %s local image path: %s", scene_number, local_img)
             
         comp_img = _create_scene_image_with_text(local_img, text, width, height)
+        logger.info("Scene %s composited image path: %s", scene_number, comp_img)
         
         audio_clip = None
         duration = scene.get("duration_seconds", 5.0)
@@ -261,9 +300,17 @@ async def render_video_ad(
                 try:
                     audio_clip = AudioFileClip(local_audio)
                     duration = max(audio_clip.duration, 3.0)
+                    logger.info(
+                        "Scene %s audio loaded from %s with duration %.2fs",
+                        scene_number,
+                        local_audio,
+                        audio_clip.duration,
+                    )
                 except Exception as e:
-                    logger.error(f"AudioFileClip error: {e}")
+                    logger.exception("AudioFileClip error for scene %s (%s)", scene_number, local_audio)
                     audio_clip = None  # Ensure we don't reference a half-constructed clip
+            else:
+                logger.warning("Scene %s audio URL could not be downloaded: %s", scene_number, audio_url)
                     
         # Moviepy requires duration to be explicitly set for ImageClips
         img_clip = ImageClip(comp_img).with_duration(duration)
@@ -279,7 +326,11 @@ async def render_video_ad(
     clips.append(cta_clip)
     
     if not clips:
-        return {"video_url": "https://placehold.co/1920x1080?text=No+Clips", "source": {}}
+        return {
+            "video_url": "https://placehold.co/1920x1080?text=No+Clips",
+            "source": {},
+            "error": "",
+        }
         
     try:
         final_video = concatenate_videoclips(clips, method="compose")
@@ -294,7 +345,9 @@ async def render_video_ad(
         
         try:
             logger.info(f"Writing moviepy video to {out_filepath}...")
-            temp_audio_name = f"temp_{uuid.uuid4().hex}.mp3"
+            # Keep the temporary audio container aligned with the requested AAC codec.
+            # Using a .mp3 temp file with audio_codec="aac" causes FFmpeg to reject the stream.
+            temp_audio_name = f"temp_{uuid.uuid4().hex}.m4a"
             final_video.write_videofile(
                 out_filepath,
                 fps=24,
@@ -309,9 +362,12 @@ async def render_video_ad(
             os.chdir(old_cwd)
         
         video_url = f"{BACKEND_BASE_URL}/api/audio/{out_filename}"
+        logger.info("Final render complete: %s", video_url)
         
         # To not break the frontend entirely, just pass an empty source
-        return {"video_url": video_url, "source": None}
+        return {"video_url": video_url, "source": None, "error": ""}
     except Exception as e:
-        logger.error(f"Moviepy render failed: {e}")
-        return {"video_url": "", "source": None}
+        error_message = f"MoviePy render failed: {e}"
+        logger.error(error_message)
+        logger.error("Moviepy render traceback:\n%s", traceback.format_exc())
+        return {"video_url": "", "source": None, "error": error_message}
