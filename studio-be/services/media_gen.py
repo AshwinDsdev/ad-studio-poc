@@ -276,11 +276,12 @@ async def process_scene(scene: dict, brand_kit: dict | None = None) -> dict:
     brand_kit = brand_kit or {}
     hero_images = brand_kit.get("hero_images", [])
 
-    # Only use scraped hero image for the FIRST scene.
-    # For subsequent scenes, always use AI-generated images so the video
-    # has variety and actually reflects the site's visual language via prompts.
+    # Use scraped hero images sequentially for scenes.
+    # If the website has enough scraped images, scene 1 gets image 1, scene 2 gets image 2, etc.
+    # If we run out of scraped images, it falls back to AI generation.
     scene_number = scene.get("scene_number", 1)
-    hero_hint = hero_images[0] if hero_images and scene_number == 1 else ""
+    idx = scene_number - 1
+    hero_hint = hero_images[idx] if hero_images and idx >= 0 and idx < len(hero_images) else ""
 
     voice_coro = generate_voice(scene["voiceover_script"])
     image_coro = generate_image(scene["visual_image_prompt"], hero_hint)
