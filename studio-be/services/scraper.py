@@ -59,19 +59,31 @@ def _extract_hero_images(soup: BeautifulSoup, base_url: str) -> list[str]:
     """Return up to 3 prominent product/hero image URLs."""
     images = []
 
-    # OG image first
+    # 1. Try OG image
     og = soup.find("meta", property="og:image")
     if og and og.get("content"):
         images.append(urljoin(base_url, og["content"]))
 
-    # Large <img> tags by size attributes or class hints
-    for img in soup.find_all("img", src=True):
-        src = img.get("src", "")
+    # 2. Try Twitter image
+    tw = soup.find("meta", attrs={"name": "twitter:image"}) or soup.find("meta", property="twitter:image")
+    if tw and tw.get("content"):
+        images.append(urljoin(base_url, tw["content"]))
+
+    # 3. Find large <img> tags by size attributes or class hints (including lazy-loaded data-src)
+    for img in soup.find_all("img"):
+        src = img.get("src") or img.get("data-src") or img.get("data-lazy-src") or ""
         if not src or src.startswith("data:"):
-            continue
-        full = urljoin(base_url, src)
+            # try to parse srcset if src is a data URI
+            srcset = img.get("srcset") or img.get("data-srcset") or ""
+            if srcset:
+                src = srcset.split(",")[0].split(" ")[0]
+            else:
+                continue
+
+        full = urljoin(base_url, src.strip())
         if full in images:
             continue
+            
         try:
             width = int(str(img.get("width", 0)).replace("px", "").replace("%", "").strip() or 0)
         except ValueError:
@@ -80,18 +92,26 @@ def _extract_hero_images(soup: BeautifulSoup, base_url: str) -> list[str]:
             height = int(str(img.get("height", 0)).replace("px", "").replace("%", "").strip() or 0)
         except ValueError:
             height = 0
+            
         cls = " ".join(img.get("class", [])).lower()
         is_hero = (
             width >= 400
             or height >= 300
             or any(k in cls for k in ["hero", "banner", "feature", "product", "main"])
         )
-        if is_hero:
+        if is_hero or not images: # If we haven't found any images yet, just grab whatever looks like an image
             images.append(full)
+            
         if len(images) >= 3:
             break
 
-    return images[:3]
+    # 4. Filter duplicates while preserving order
+    unique_images = []
+    for img in images:
+        if img not in unique_images:
+            unique_images.append(img)
+
+    return unique_images[:3]
 
 
 async def scrape_url(url: str) -> dict:
@@ -107,6 +127,9 @@ async def scrape_url(url: str) -> dict:
         }
     }
     """
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = "https://" + url
+
     try:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
             headers = {
