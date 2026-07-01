@@ -242,6 +242,80 @@ async def _run_playwright(url: str) -> tuple[str, str]:
     return await asyncio.to_thread(_playwright_sync, url)
 
 
+async def _screenshot_via_api(url: str) -> str:
+    """
+    Serverless fallback: fetch a screenshot from a free public API.
+    No API key required. Used on Vercel / any env without Playwright.
+
+    Pipeline:
+      1. thum.io  — free, no key, returns JPEG directly
+      2. microlink.io — free tier, returns JSON with screenshot URL
+    """
+    import urllib.parse
+    encoded = urllib.parse.quote(url, safe="")
+
+    apis = [
+        # thum.io: returns raw JPEG, completely free, no signup
+        f"https://image.thum.io/get/width/1280/crop/900/noanimate/{url}",
+        # microlink: returns JSON {data: {screenshot: {url: ...}}}
+        f"https://api.microlink.io?url={encoded}&screenshot=true&meta=false&embed=screenshot.url",
+    ]
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
+
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, headers=headers) as client:
+        # --- 1. thum.io ---
+        try:
+            logger.info("Trying thum.io screenshot for %s", url)
+            r = await client.get(apis[0])
+            if r.status_code == 200 and r.headers.get("content-type", "").startswith("image/"):
+                filename = f"screenshot_{uuid.uuid4().hex}.jpg"
+                filepath = os.path.join(AUDIO_CACHE_DIR, filename)
+                with open(filepath, "wb") as f:
+                    f.write(r.content)
+                screenshot_url = f"{BACKEND_BASE_URL}/api/audio/{filename}"
+                logger.info("thum.io screenshot saved (%dKB): %s", len(r.content) // 1024, screenshot_url)
+                return screenshot_url
+            else:
+                logger.warning("thum.io returned %s / content-type=%s", r.status_code, r.headers.get("content-type"))
+        except Exception as e:
+            logger.warning("thum.io failed: %s", e)
+
+        # --- 2. microlink.io ---
+        try:
+            logger.info("Trying microlink.io screenshot for %s", url)
+            r = await client.get(apis[1])
+            if r.status_code == 200:
+                data = r.json()
+                img_url = (
+                    data.get("data", {}).get("screenshot", {}).get("url", "")
+                    or data.get("data", {}).get("image", {}).get("url", "")
+                )
+                if img_url:
+                    # Download and re-serve via our backend
+                    img_r = await client.get(img_url)
+                    if img_r.status_code == 200:
+                        filename = f"screenshot_{uuid.uuid4().hex}.jpg"
+                        filepath = os.path.join(AUDIO_CACHE_DIR, filename)
+                        with open(filepath, "wb") as f:
+                            f.write(img_r.content)
+                        screenshot_url = f"{BACKEND_BASE_URL}/api/audio/{filename}"
+                        logger.info("microlink screenshot saved (%dKB): %s", len(img_r.content) // 1024, screenshot_url)
+                        return screenshot_url
+            logger.warning("microlink returned %s: %s", r.status_code, r.text[:200])
+        except Exception as e:
+            logger.warning("microlink.io failed: %s", e)
+
+    logger.error("All screenshot APIs failed for %s", url)
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # httpx fallback
 # ---------------------------------------------------------------------------
@@ -291,7 +365,12 @@ async def scrape_url(url: str) -> dict:
         # --- Primary: Playwright in background thread ---
         screenshot_url, html = await _run_playwright(url)
 
-        # --- Fallback: plain httpx ---
+        # --- Serverless fallback: free screenshot API (thum.io / microlink) ---
+        if not screenshot_url:
+            logger.warning("Playwright unavailable (serverless env?) — using screenshot API fallback.")
+            screenshot_url = await _screenshot_via_api(url)
+
+        # --- Last resort HTML: plain httpx ---
         if not html:
             logger.warning("Playwright failed — falling back to httpx.")
             try:
