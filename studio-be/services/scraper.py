@@ -282,6 +282,9 @@ async def scrape_url(url: str) -> dict:
          takes a screenshot, and returns the full DOM HTML.
       2. httpx fallback if Playwright is unavailable.
     """
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = "https://" + url
+
     try:
         base_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
 
